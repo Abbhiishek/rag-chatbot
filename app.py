@@ -40,13 +40,33 @@ def create_vectordb(files, filenames):
 docs_folder = os.path.join(os.getcwd(), "docs")
 mdx_file_paths = get_mdx_files(docs_folder)
 
+
+prompt_template = """
+You are a knowledgeable assistant for Keploy, an API testing and mocking tool. Your role is to provide accurate, concise, and helpful information based on the Keploy documentation.
+
+Instructions:
+1. Answer questions directly and concisely.
+2. Use information only from the provided context.
+3. If the question can't be answered from the context, say "I don't have enough information to answer that question."
+4. Cite sources by mentioning the filename at the end of relevant sentences, e.g., (source: filename.md).
+5. If asked about code, provide explanations and examples when possible.
+6. For multi-step processes, use numbered lists.
+7. Highlight important terms or concepts using bold text.
+8. If the user asks about a topic not related to Keploy, politely redirect them to Keploy-related questions.
+
+Context from Keploy documentation:
+{context}
+
+Remember, your goal is to help users understand and use Keploy effectively.
+"""
+
 if mdx_file_paths:
     mdx_files = [open(f, "rb").read() for f in mdx_file_paths]
     mdx_file_names = [os.path.basename(f) for f in mdx_file_paths]
     st.session_state["vectordb"] = create_vectordb(mdx_files, mdx_file_names)
 
     # Create a conversational chain
-    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True, output_key="answer")
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=False, output_key="answer")
     llm = AzureChatOpenAI(
         azure_endpoint="https://chatsupportsys5416848984.cognitiveservices.azure.com/openai/deployments/chatbot-ai/chat/completions?api-version=2023-03-15-preview",
         openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
@@ -63,6 +83,9 @@ if mdx_file_paths:
 else:
     st.error("No MDX files found in the docs folder.")
     st.stop()
+
+
+
 
 # Initialize the chat history in session state if it doesn't exist
 if "chat_history" not in st.session_state:
@@ -81,24 +104,38 @@ question = st.chat_input("Ask anything")
 
 # Handle the user's question
 if question:
-    # Add user message to chat history
-    st.session_state.chat_history.append({"role": "user", "content": question})
+    vectordb = st.session_state.get("vectordb", None)
+    if vectordb is None:
+        st.error("No vectordb found in session state.")
+        st.stop()
     
+    search_results = vectordb.similarity_search(question, k=3)
+    context = "\n".join([doc.page_content for doc in search_results])
+    prompt_with_context = prompt_template.format(context=context)
+
+    st.session_state.chat_history.append({"role": "user", "content": question})
+
     with st.chat_message("user"):
         st.write(question)
 
     with st.chat_message("assistant"):
-        response = st.session_state["conversation_chain"]({"question": question})
-        st.write(response['answer'])
+        response_placeholder = st.empty()
+        full_response = ""
+
+        for chunk in st.session_state["conversation_chain"].stream({"question": question}):
+            if "answer" in chunk:
+                full_response += chunk["answer"]
+                response_placeholder.markdown(full_response + "▌")
+        
+        response_placeholder.markdown(full_response)
         
         # Display source information
-        if 'source_documents' in response:
+        if 'source_documents' in chunk:
             st.write("Sources:")
-            for doc in response['source_documents']:
+            for doc in chunk['source_documents']:
                 st.write(f"- {doc.metadata['source']}")
 
-        # Add assistant's response to chat history
-        st.session_state.chat_history.append({"role": "assistant", "content": response['answer']})
+        st.session_state.chat_history.append({"role": "assistant", "content": full_response})
 
     # Rerun only when a new question is asked
     st.rerun()
