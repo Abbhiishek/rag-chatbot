@@ -1,115 +1,104 @@
 # Import necessary libraries
-import databutton as db
 import streamlit as st
 import openai
-from brain import get_index_for_pdf
-from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
+from brain import get_index_for_mdx
 import os
+from dotenv import load_dotenv
+from langchain_openai import AzureChatOpenAI
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Set the title for the Streamlit app
-st.title("RAG enhanced Chatbot")
+st.title("Keploy RAG Chatbot")
 
-# Set up the OpenAI API key from databutton secrets
-os.environ["OPENAI_API_KEY"] = db.secrets.get("OPENAI_API_KEY")
-openai.api_key = db.secrets.get("OPENAI_API_KEY")
+# Azure OpenAI setup
+openai.api_type = "azure"
+openai.api_base = os.getenv("AZURE_OPENAI_ENDPOINT")
+openai.api_version = os.getenv("OPENAI_API_VERSION")
+openai.api_key = os.getenv("AZURE_OPENAI_API_KEY")
 
+# Function to get all MDX files from the docs directory and its subdirectories
+def get_mdx_files(directory):
+    mdx_files = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if file.endswith('.md'):
+                mdx_files.append(os.path.join(root, file))
+    return mdx_files
 
-# Cached function to create a vectordb for the provided PDF files
-@st.cache_data
+# Cached function to create a vectordb for the provided MDX files
+@st.cache_resource
 def create_vectordb(files, filenames):
-    # Show a spinner while creating the vectordb
-    with st.spinner("Vector database"):
-        vectordb = get_index_for_pdf(
-            [file.getvalue() for file in files], filenames, openai.api_key
-        )
+    with st.spinner("Creating vectordb..."):
+        vectordb = get_index_for_mdx(files, filenames, openai.api_key)
     return vectordb
 
+# Load MDX files from the docs folder and its subdirectories
+docs_folder = os.path.join(os.getcwd(), "docs")
+mdx_file_paths = get_mdx_files(docs_folder)
 
-# Upload PDF files using Streamlit's file uploader
-pdf_files = st.file_uploader("", type="pdf", accept_multiple_files=True)
+if mdx_file_paths:
+    mdx_files = [open(f, "rb").read() for f in mdx_file_paths]
+    mdx_file_names = [os.path.basename(f) for f in mdx_file_paths]
+    st.session_state["vectordb"] = create_vectordb(mdx_files, mdx_file_names)
 
-# If PDF files are uploaded, create the vectordb and store it in the session state
-if pdf_files:
-    pdf_file_names = [file.name for file in pdf_files]
-    st.session_state["vectordb"] = create_vectordb(pdf_files, pdf_file_names)
+    # Create a conversational chain
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True, output_key="answer")
+    llm = AzureChatOpenAI(
+        azure_endpoint="https://chatsupportsys5416848984.cognitiveservices.azure.com/openai/deployments/chatbot-ai/chat/completions?api-version=2023-03-15-preview",
+        openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        deployment_name="chatbot-ai",
+        temperature=0.7
+    )
+    st.session_state["conversation_chain"] = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=st.session_state["vectordb"].as_retriever(),
+        memory=memory,
+        return_source_documents=True,
+        verbose=True,
+    )
+else:
+    st.error("No MDX files found in the docs folder.")
+    st.stop()
 
-# Define the template for the chatbot prompt
-prompt_template = """
-    You are a helpful Assistant who answers to users questions based on multiple contexts given to you.
-
-    Keep your answer short and to the point.
-    
-    The evidence are the context of the pdf extract with metadata. 
-    
-    Carefully focus on the metadata specially 'filename' and 'page' whenever answering.
-    
-    Make sure to add filename and page number at the end of sentence you are citing to.
-        
-    Reply "Not applicable" if text is irrelevant.
-     
-    The PDF content is:
-    {pdf_extract}
-"""
+# Initialize the chat history in session state if it doesn't exist
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 # Get the current prompt from the session state or set a default value
 prompt = st.session_state.get("prompt", [{"role": "system", "content": "none"}])
 
 # Display previous chat messages
-for message in prompt:
-    if message["role"] != "system":
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
+for message in st.session_state.chat_history:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
 
 # Get the user's question using Streamlit's chat input
 question = st.chat_input("Ask anything")
 
 # Handle the user's question
 if question:
-    vectordb = st.session_state.get("vectordb", None)
-    if not vectordb:
-        with st.message("assistant"):
-            st.write("You need to provide a PDF")
-            st.stop()
-
-    # Search the vectordb for similar content to the user's question
-    search_results = vectordb.similarity_search(question, k=3)
-    # search_results
-    pdf_extract = "/n ".join([result.page_content for result in search_results])
-
-    # Update the prompt with the pdf extract
-    prompt[0] = {
-        "role": "system",
-        "content": prompt_template.format(pdf_extract=pdf_extract),
-    }
-
-    # Add the user's question to the prompt and display it
-    prompt.append({"role": "user", "content": question})
+    # Add user message to chat history
+    st.session_state.chat_history.append({"role": "user", "content": question})
+    
     with st.chat_message("user"):
         st.write(question)
 
-    # Display an empty assistant message while waiting for the response
     with st.chat_message("assistant"):
-        botmsg = st.empty()
+        response = st.session_state["conversation_chain"]({"question": question})
+        st.write(response['answer'])
+        
+        # Display source information
+        if 'source_documents' in response:
+            st.write("Sources:")
+            for doc in response['source_documents']:
+                st.write(f"- {doc.metadata['source']}")
 
-    # Call ChatGPT with streaming and display the response as it comes
-    response = []
-    result = ""
-    for chunk in openai.ChatCompletion.create(
-        model="gpt-3.5-turbo", messages=prompt, stream=True
-    ):
-        text = chunk.choices[0].get("delta", {}).get("content")
-        if text is not None:
-            response.append(text)
-            result = "".join(response).strip()
-            botmsg.write(result)
+        # Add assistant's response to chat history
+        st.session_state.chat_history.append({"role": "assistant", "content": response['answer']})
 
-    # Add the assistant's response to the prompt
-    prompt.append({"role": "assistant", "content": result})
-
-    # Store the updated prompt in the session state
-    st.session_state["prompt"] = prompt
-    prompt.append({"role": "assistant", "content": result})
-
-    # Store the updated prompt in the session state
-    st.session_state["prompt"] = prompt
+    # Rerun only when a new question is asked
+    st.rerun()

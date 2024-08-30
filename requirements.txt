@@ -3,3 +3,4 @@ langchain
 faiss-cpu
 pypdf
 tiktoken
+streamlit
