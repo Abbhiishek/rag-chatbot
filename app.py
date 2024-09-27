@@ -20,6 +20,8 @@ openai.api_base = os.getenv("AZURE_OPENAI_ENDPOINT")
 openai.api_version = os.getenv("OPENAI_API_VERSION")
 openai.api_key = os.getenv("AZURE_OPENAI_API_KEY")
 
+
+
 # Function to get all MDX files from the docs directory and its subdirectories
 def get_mdx_files(directory):
     mdx_files = []
@@ -41,24 +43,24 @@ docs_folder = os.path.join(os.getcwd(), "docs")
 mdx_file_paths = get_mdx_files(docs_folder)
 
 
-prompt_template = """
-You are a knowledgeable assistant for Keploy, an API testing and mocking tool. Your role is to provide accurate, concise, and helpful information based on the Keploy documentation.
+# prompt_template = """
+# You are a knowledgeable assistant for Keploy, an API testing and mocking tool. Your role is to provide accurate, concise, and helpful information based on the Keploy documentation.
 
-Instructions:
-1. Answer questions directly and concisely.
-2. Use information only from the provided context.
-3. If the question can't be answered from the context, say "I don't have enough information to answer that question."
-4. Cite sources by mentioning the filename at the end of relevant sentences, e.g., (source: filename.md).
-5. If asked about code, provide explanations and examples when possible.
-6. For multi-step processes, use numbered lists.
-7. Highlight important terms or concepts using bold text.
-8. If the user asks about a topic not related to Keploy, politely redirect them to Keploy-related questions.
+# Instructions:
+# 1. Answer questions directly and concisely.
+# 2. Use information only from the provided context.
+# 3. If the question can't be answered from the context, say "I don't have enough information to answer that question."
+# 4. Cite sources by mentioning the filename at the end of relevant sentences, e.g., (source: filename.md).
+# 5. If asked about code, provide explanations and examples when possible.
+# 6. For multi-step processes, use numbered lists.
+# 7. Highlight important terms or concepts using bold text.
+# 8. If the user asks about a topic not related to Keploy, politely redirect them to Keploy-related questions.
 
-Context from Keploy documentation:
-{context}
+# Context from Keploy documentation:
+# {context}
 
-Remember, your goal is to help users understand and use Keploy effectively.
-"""
+# Remember, your goal is to help users understand and use Keploy effectively.
+# """
 
 if mdx_file_paths:
     mdx_files = [open(f, "rb").read() for f in mdx_file_paths]
@@ -68,9 +70,10 @@ if mdx_file_paths:
     # Create a conversational chain
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=False, output_key="answer")
     llm = AzureChatOpenAI(
-        azure_endpoint="https://chatsupportsys5416848984.cognitiveservices.azure.com/openai/deployments/chatbot-ai/chat/completions?api-version=2023-03-15-preview",
-        openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-        deployment_name="chatbot-ai",
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        azure_deployment="keploy-gpt4o",
+        openai_api_version=os.environ["OPENAI_API_VERSION"],
+        openai_api_type="azure",
         temperature=0.7
     )
     st.session_state["conversation_chain"] = ConversationalRetrievalChain.from_llm(
@@ -111,7 +114,7 @@ if question:
     
     search_results = vectordb.similarity_search(question, k=3)
     context = "\n".join([doc.page_content for doc in search_results])
-    prompt_with_context = prompt_template.format(context=context)
+    # prompt_with_context = prompt_template.format(context=context)
 
     st.session_state.chat_history.append({"role": "user", "content": question})
 

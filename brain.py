@@ -54,9 +54,9 @@ def get_index_for_mdx(mdx_files, mdx_names, openai_api_key):
     # print("Embedding documents:", documents)
     
     embeddings = AzureOpenAIEmbeddings(
-        azure_endpoint="https://chatsupportsys5416848984.cognitiveservices.azure.com/openai/deployments/text-embedding-3-large/embeddings?api-version=2023-05-15",
-        openai_api_key=openai_api_key,
-        model ="text-embedding-3-large",
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        model ="keploy-docs-embedding",
         chunk_size=1,  # You can adjust this value as needed
     )
     # print("FAISS index:", embeddings)
